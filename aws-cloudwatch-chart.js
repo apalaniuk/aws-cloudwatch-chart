@@ -55,15 +55,6 @@
 				"InstanceId": "i-2d55aad0",			
 			}
 		],
-		"aws": {
-        	/// AWS IAM accessKeyId
-            /// Dpn't forget to allow IAM to access CloudWatch. Not other policies are required. Safe.
-			"accessKeyId": "XXXXXXXXXXXXXXXXXX",				
-            /// AWS IAM secretAccessKey
-			"secretAccessKey": "XXXXXX/XXXXXXXXX/XXXXXXXXXXX/XXXXXXXXX",	
-            /// AWS region
-			"region": "us-east-1"												
-		},
 		"timeOffset": 1440,		//// Get statistic for last 1440 minutes
 		"timePeriod": 60,		//// Get statistic for each 60 seconds 
 		"chartSamples": 20,		//// Data points extrapolated on chart
@@ -85,12 +76,7 @@ module.exports = (function() {
 		if (typeof(config) === 'undefined')
 			throw new Error('config parameter is missing'); 
 
-		if (!config.hasOwnProperty('aws') || !config.aws.hasOwnProperty('accessKeyId') || !config.aws.hasOwnProperty('secretAccessKey') || !config.aws.hasOwnProperty('region'))
-			throw new Error('config.aws.accessKeyId, config.aws.secretAccessKey, config.aws.region are required'); 
-
 		this.AWS = require('aws-sdk');
-		this.AWS.config.update({accessKeyId: config.aws.accessKeyId, secretAccessKey: config.aws.secretAccessKey});
-		this.AWS.config.update({region: config.aws.region});
 
 		this.cloudwatch = new this.AWS.CloudWatch();
 
@@ -173,39 +159,31 @@ module.exports = (function() {
 
 	AwsCloudWatchChart.prototype.getChart = function()
 	{
-		var d = Q.defer();
-		var metricsPrmomises = [];
-		for (var k in this.metrics)
-			metricsPrmomises.push(this.metrics[k].getStatistics());
+		var metricsPromises = [];
+		for (var k in this.metrics) {
+			metricsPromises.push(this.metrics[k].getStatistics().promise());
+		}
 
-		var that = this;
-		Q.all(metricsPrmomises).then(function(){
-			d.resolve(that);
+		//var that = this;
+
+		return Promise.all(metricsPromises).then(() => {
+			return Promise.resolve(this);
 		});
-		return d.promise;
 	}
 
-	AwsCloudWatchChart.prototype.listMetrics = function(Namespace, MetricName) 
+	AwsCloudWatchChart.prototype.listMetrics = function(namespace, metricName) 
 	{
-		if (typeof(Namespace) === 'undefined')
-			var Namespace = 'AWS/EC2';
-		if (typeof(MetricName) === 'undefined')
-			var MetricName = 'CPUUtilization';
-
-		var d = Q.defer();
-		var params = { Namespace: Namespace, MetricName: MetricName};
-
-		var that = this;
-		this.cloudwatch.listMetrics(params, function(err, data) {
-			if (err) {
-				throw new Error('Error loading metrics list: '+err); 
-			}
-			else {
-				d.resolve(data.Metrics);
-			}
+		return this.cloudwatch.listMetrics({
+			Namespace: namespace,
+			MetricName: metricName
+		})
+		.promise()
+		.then(data => {
+			return Promise.resolve(data.Metrics);
+		})
+		.catch(err => {
+			throw new Error(`Error loading metrics list: ${err}`); 
 		});
-		
-		return d.promise;
 	}
 
 	AwsCloudWatchChart.prototype.EXTENDED_MAP = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-.';
@@ -240,28 +218,28 @@ module.exports = (function() {
 
 	AwsCloudWatchChart.prototype.save = function(filename)
 	{
-		var d = Q.defer();
 		var url = this.getURL();
 
 		var file = fs.createWriteStream(filename);
-		var request = http.get(url, function(response) {
-			response.pipe(file);
-			file.on('finish', function() {
-				file.close(function(){
-					d.resolve(filename);
-				});  // close() is async, call cb after close completes.
-			});
-		}).on('error', function(err) {
-			fs.unlink(filename);
-			d.resolve(false);
-		});
 
-		return d.promise;
+		return new Promise((resolve, reject) => {
+			http.get(url, (response) => {
+				response.pipe(file);
+
+				file.on('finish', function() {
+					file.close(function(){
+						resolve(filename);
+					});  // close() is async, call cb after close completes.
+				});
+			}).on('error', function(err) {
+				fs.unlink(filename);
+				resolve(false);
+			});
+		});
 	}
 
 	AwsCloudWatchChart.prototype.get = function()
 	{
-		var d = Q.defer();
 		var url = this.getURL();
 
 		var requestSettings = {
@@ -270,14 +248,16 @@ module.exports = (function() {
            encoding: null
         };
 
-		request(requestSettings, function (error, response, body) {
-			if (!error && response.statusCode == 200) 
-			{
-				d.resolve(body);
-			}
+		return new Promise((resolve, reject) => {
+			request(requestSettings, (error, response, body) => {
+				if (!error && response.statusCode == 200) 
+				{
+					resolve(body);
+				} else {
+					reject(new Error(error || response.statusCode));
+				}
+			});
 		});
-
-		return d.promise;
 	}
 
 	AwsCloudWatchChart.prototype.getURL = function()
@@ -412,10 +392,12 @@ module.exports = (function() {
 
 
 	AwsCloudWatchChartMetric = function(AwsCloudWatchChart) {
+		/*
 		this.Namespace = 'AWS/EC2';
 		this.MetricName = 'CPUUtilization';
 		this.Dimensions = [];
 		this.Unit = 'Percent'
+		*/
 
 		this.AwsCloudWatchChart = AwsCloudWatchChart;
 		this.cloudwatch = AwsCloudWatchChart.cloudwatch;
@@ -433,8 +415,6 @@ module.exports = (function() {
 
 	AwsCloudWatchChartMetric.prototype.getStatistics = function()
 	{
-		var d = Q.defer();
-
 		var toTime = new Date;
 		var fromTime = new Date;
 
@@ -452,21 +432,19 @@ module.exports = (function() {
 		};
 
 		var that = this;
-		this.cloudwatch.getMetricStatistics(params, function(err, data) {
-			if (err) 
-			{
-				throw new Error('Error loading statistics: '+err); 
-			}
-			else  
-			{
-				for (var k in data.Datapoints)
-					that.statistics.push(data.Datapoints[k]);
-				that.isLoaded = true;
-				d.resolve(that.statistics);
-			} 
-		});
 
-		return d.promise;
+		return this.cloudwatch.getMetricStatistics(params).promise()
+			.then(data => {
+				for (const k in data.Datapoints) {
+					that.statistics.push(data.Datapoints[k]);
+				}
+
+				that.isLoaded = true;
+				return Promise.resolve(that.statistics);
+			})
+			.catch(err => {
+				return Promise.reject(Error(`Error loading statistics: ${err}`)); 
+			});
 	}
 
 	AwsCloudWatchChartMetric.prototype.getTitle = function()
@@ -477,7 +455,6 @@ module.exports = (function() {
 			return this.Dimensions[0]['Value'];
 	}
 
-	
 	return AwsCloudWatchChart;
 
 })();
