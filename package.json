@@ -16,6 +16,7 @@
     "url": "http://github.com/jeka-kiselyov/aws-cloudwatch-chart/issues"
   },
   "scripts": {
+    "test:lint:js": "eslint .",
     "test": "make test"
   },
   "main": "aws-cloudwatch-chart.js",
@@ -41,14 +42,12 @@
     "CPU"
   ],
   "dependencies": {
-    "q": "~1.4.1",
+    "aws-sdk": "^2.211.0",
     "request": "^2.55.0"
   },
-  "optionalDependencies": {
-    "aws-sdk": "~2.1.30"
-  },
   "devDependencies": {
-    "mocha": "~2.2.5",
-    "chai": "~2.3.0"
+    "chai": "~2.3.0",
+    "eslint": "^4.19.0",
+    "mocha": "~2.2.5"
   }
 }

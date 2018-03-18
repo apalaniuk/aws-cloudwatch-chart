@@ -7,9 +7,9 @@
 
 	Usage:
 
-	var AwsCloudWatchChart = require('aws-cloudwatch-chart');
-	var config = require('./config.json');
-	var acs = new AwsCloudWatchChart(config);
+	let AwsCloudWatchChart = require('aws-cloudwatch-chart');
+	let config = require('./config.json');
+	let acs = new AwsCloudWatchChart(config);
 
 	acs.getChart().then(function(chart){
 		chart.save('image.png').then(function(filename){
@@ -30,112 +30,129 @@
 	{
 		"metrics": [	/// array of metrics settings
 			{
-                /// Title of metrics. Will be displayed on chart's legend. Should be unique
+				/// Title of metrics. Will be displayed on chart's legend. Should be unique
 				"title": "Server1 Max CPU",
-                /// AWS namespace
+				/// AWS namespace
 				/// http://docs.aws.amazon.com/AmazonCloudWatch/latest/DeveloperGuide/aws-namespaces.html
 				"namespace": "AWS/EC2",
-                /// Metric name
+				/// Metric name
 				/// http://docs.aws.amazon.com/AmazonCloudWatch/latest/DeveloperGuide/CW_Support_For_AWS.html
-				"metricName": "CPUUtilization",		
-                /// Statistics values. 'Maximum' and "Average" supported 
-				"statisticValues": "Maximum",		
-                /// Unit. http://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/API_GetMetricStatistics.html
-                /// 'Percent' and 'Count' currently supported
-				"unit": "Percent",					
-                /// Chart line color for this metric
-				"color": "af9cf4",				
-                /// Line thickness in px
-				"thickness": 2,					
-                /// Dashed or solid
-				"dashed": false,				
-                /// Any property other that listed above will be added to Dimensions array. It's different for different metrics namespaces
-				/// InstanceId. This parameter is for Dimensions array. Different for different metrics namespaces
-				/// http://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/API_Dimension.html  
-				"InstanceId": "i-2d55aad0",			
+				"metricName": "CPUUtilization",
+				/// Statistics values. 'Maximum' and "Average" supported
+				"statistic": "Maximum",
+				/// Unit. http://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/API_GetMetricStatistics.html
+				/// 'Percent' and 'Count' currently supported
+				"unit": "Percent",
+				/// Chart line color for this metric
+				"color": "af9cf4",
+				/// Line thickness in px
+				"thickness": 2,
+				/// Dashed or solid
+				"dashed": false,
+				/// This parameter is for Dimensions array. Different for different metrics namespaces
+				/// http://docs.aws.amazon.com/AmazonCloudWatch/latest/APIReference/API_Dimension.html
+				"dimensions": [
+					{
+						"Name":"InstanceId",
+						"Value": "i-2d55aad0"
+					}
+				]
 			}
 		],
 		"timeOffset": 1440,		//// Get statistic for last 1440 minutes
-		"timePeriod": 60,		//// Get statistic for each 60 seconds 
+		"timePeriod": 60,		//// Get statistic for each 60 seconds
 		"chartSamples": 20,		//// Data points extrapolated on chart
 		"width": 1000,			//// Result image width. Maximum value for width or height is 1,000. Width x height cannot exceed 300,000.
-		"height":250 			//// Result image height. Maximum value for width or height is 1,000. Width x height cannot exceed 300,000.
+		"height":250			 //// Result image height. Maximum value for width or height is 1,000. Width x height cannot exceed 300,000.
 	}
 
 */
 
 module.exports = (function() {
 
-	var Q = require("q");
-	var http = require('http');
-	var request = require('request');
-	var fs = require('fs');
+	const http = require('http');
+	const request = require('request');
+	const fs = require('fs');
+    const AWS = require('aws-sdk');
+    const cloudwatchClient = new AWS.CloudWatch();
 
-	AwsCloudWatchChart = function(config) {
+	const defaultConfig = {
+		timeOffset: 1440,
+		timePeriod: 60,
+		chartSamples: 24,
+		width: 1000,
+		height: 250
+	};
 
-		if (typeof(config) === 'undefined')
-			throw new Error('config parameter is missing'); 
-
-		this.AWS = require('aws-sdk');
-
-		this.cloudwatch = new this.AWS.CloudWatch();
+	function AwsCloudWatchChart(config) {
+		console.log('in AwsCloudWatchChart');
 
 		this.metrics = [];
 
-		this.timeOffset = config.hasOwnProperty('timeOffset') ? config.timeOffset : 24 * 60;
-		this.timePeriod = config.hasOwnProperty('timePeriod') ? config.timePeriod : 60;
-		this.chartSamples = config.hasOwnProperty('chartSamples') ? config.chartSamples : 24;
+		if (typeof(config) !== 'object')
+			throw new Error('Must provide config object');
 
-		this.width = config.hasOwnProperty('width') ? config.width : 1000;
-		this.height = config.hasOwnProperty('height') ? config.height : 250;
+		this.config = Object.assign(
+			{},
+			defaultConfig,
+			config
+		);
 
-		if (this.width > 1000 || this.height > 1000 || this.height * this.width > 300000)
+		if (!Array.isArray(this.config.metrics)) {
+			throw new Error('config.metrics array required');
+		}
+
+		if (this.config.width > 1000 || this.config.height > 1000 || this.config.height * this.config.width > 300000)
 			throw new Error('Maximum value for width or height is 1,000. Width x height cannot exceed 300,000.');
 
-		if (this.width < 1 || this.height < 1)
-			throw new Error('Invalid width and height parameters'); 	
+		if (this.config.width < 1 || this.config.height < 1)
+			throw new Error('Invalid width and height parameters');
 
-		if (this.timePeriod % 60 !== 0)
-			throw new Error('config.timePeriod should be based on 60'); 			
+		if (this.config.timePeriod % 60 !== 0)
+			throw new Error('config.timePeriod should be based on 60');
 
-		if (config.hasOwnProperty('metrics') || !isArray(config.metrics))
-		{
-			for (var k in config.metrics)
-			{
-				var m = this.addMetric(config.metrics[k]);
-			}
-		} else 
-			throw new Error('config.metrics array required'); 
-
+		for (let k in this.config.metrics) {
+			this.addMetric(this.config.metrics[k]);
+		}
 	}
 
 	AwsCloudWatchChart.prototype.addMetric = function(params)
 	{
-		var m = new AwsCloudWatchChartMetric(this);
-		if (typeof(params) != 'undefined')
+		let m = new AwsCloudWatchChartMetric(this);
+
+		for (let k in params)
 		{
-			for (var k in params)
-			{
-				var kl = k.toLowerCase();
-				if (kl == 'title')
+			console.log(`Parameter: ${k}`);
+			switch(k.toLowerCase()) {
+				case 'title':
 					m.title = '' + params[k];
-				else if (kl == 'statisticvalues')
-					m.statisticValues = params[k];
-				else if (kl == 'namespace')
+					break;
+				case 'statistic':
+					m.statistic = params[k];
+					break;
+				case 'namespace':
 					m.Namespace = '' + params[k];
-				else if (kl == 'metricname')
+					break;
+				case 'metricname':
 					m.MetricName = '' + params[k];
-				else if (kl == 'color')
+					break;
+				case 'color':
 					m.color = params[k];
-				else if (kl == 'unit')
+					break;
+				case 'unit':
 					m.Unit = params[k];
-				else if (kl == 'thickness')
+					break;
+				case 'thickness':
 					m.thickness = parseInt(params[k], 10);
-				else if (kl == 'dashed')
+					break;
+				case 'dashed':
 					m.dashed = (params[k] ? true : false);
-				else {
-					m.Dimensions.push({Name: k, Value: params[k]});
-				}
+					break;
+				case 'dimensions':
+					m.Dimensions = params[k];
+					break;
+				default:
+					throw new Error(`Unknown parameter: ${k}`);
 			}
 		}
 
@@ -143,37 +160,37 @@ module.exports = (function() {
 		return m;
 	}
 
-	AwsCloudWatchChart.prototype.getFromTimeString = function()
+	AwsCloudWatchChart.prototype.getStartTimeString = function()
 	{
-		var i = new Date;
-		i.setTime(i.getTime() - this.timeOffset*60*1000);
+		let i = new Date;
+		i.setTime(i.getTime() - this.config.timeOffset*60*1000);
 		return (i.getUTCMonth()+1)+"/"+i.getUTCDate()+" "+("0" + i.getUTCHours()).slice(-2)+':'+("0" + i.getUTCMinutes()).slice(-2);
 	}
 
 	AwsCloudWatchChart.prototype.getToTimeString = function()
 	{
-		var i = new Date;
-		return (i.getUTCMonth()+1)+"/"+i.getUTCDate()+" "+("0" + i.getUTCHours()).slice(-2)+':'+("0" + i.getUTCMinutes()).slice(-2);		
+		let i = new Date;
+		return (i.getUTCMonth()+1)+"/"+i.getUTCDate()+" "+("0" + i.getUTCHours()).slice(-2)+':'+("0" + i.getUTCMinutes()).slice(-2);
 	}
 
 
 	AwsCloudWatchChart.prototype.getChart = function()
 	{
-		var metricsPromises = [];
-		for (var k in this.metrics) {
-			metricsPromises.push(this.metrics[k].getStatistics().promise());
+		let metricsPromises = [];
+
+		for (let k in this.metrics) {
+			metricsPromises.push(this.metrics[k].getStatistics());
 		}
 
-		//var that = this;
-
-		return Promise.all(metricsPromises).then(() => {
-			return Promise.resolve(this);
-		});
+		return Promise.all(metricsPromises)
+			.then(() => {
+				return Promise.resolve(this);
+			});
 	}
 
-	AwsCloudWatchChart.prototype.listMetrics = function(namespace, metricName) 
+	AwsCloudWatchChart.prototype.listMetrics = function(namespace, metricName)
 	{
-		return this.cloudwatch.listMetrics({
+		return cloudwatchClient.listMetrics({
 			Namespace: namespace,
 			MetricName: metricName
 		})
@@ -182,7 +199,7 @@ module.exports = (function() {
 			return Promise.resolve(data.Metrics);
 		})
 		.catch(err => {
-			throw new Error(`Error loading metrics list: ${err}`); 
+			throw new Error(`Error loading metrics list: ${err}`);
 		});
 	}
 
@@ -190,67 +207,66 @@ module.exports = (function() {
 
 	AwsCloudWatchChart.prototype.extendedEncode = function(arrVals, maxVal)
 	{
-		var chartData = '';
-		var EXTENDED_MAP_LENGTH = this.EXTENDED_MAP.length;
-		for (i = 0, len = arrVals.length; i < len; i++) 
+		let chartData = '';
+		let EXTENDED_MAP_LENGTH = this.EXTENDED_MAP.length;
+		for (let i = 0, len = arrVals.length; i < len; i++)
 		{
-			var numericVal = new Number(arrVals[i]);
+			let numericVal = new Number(arrVals[i]);
 			// Scale the value to maxVal.
-			var scaledVal = Math.floor(EXTENDED_MAP_LENGTH * EXTENDED_MAP_LENGTH * numericVal / maxVal);
+			let scaledVal = Math.floor(EXTENDED_MAP_LENGTH * EXTENDED_MAP_LENGTH * numericVal / maxVal);
 
 			if(scaledVal > (EXTENDED_MAP_LENGTH * EXTENDED_MAP_LENGTH) - 1)
 			{
 				chartData += "..";
-			} else if (scaledVal < 0)
-			{
+			} else if (scaledVal < 0) {
 				chartData += '__';
-			} else 
-			{
+			} else {
 				// Calculate first and second digits and add them to the output.
-				var quotient = Math.floor(scaledVal / EXTENDED_MAP_LENGTH);
-				var remainder = scaledVal - EXTENDED_MAP_LENGTH * quotient;
+				let quotient = Math.floor(scaledVal / EXTENDED_MAP_LENGTH);
+				let remainder = scaledVal - EXTENDED_MAP_LENGTH * quotient;
+
 				chartData += this.EXTENDED_MAP.charAt(quotient) + this.EXTENDED_MAP.charAt(remainder);
 			}
-	  }
+		}
 
-	  return chartData;
+		return chartData;
 	}
 
 	AwsCloudWatchChart.prototype.save = function(filename)
 	{
-		var url = this.getURL();
+		let url = this.getURL();
 
-		var file = fs.createWriteStream(filename);
+		let file = fs.createWriteStream(filename);
 
 		return new Promise((resolve, reject) => {
 			http.get(url, (response) => {
 				response.pipe(file);
 
-				file.on('finish', function() {
-					file.close(function(){
+				file.on('finish', () => {
+					file.close(() => {
 						resolve(filename);
-					});  // close() is async, call cb after close completes.
+					});
 				});
-			}).on('error', function(err) {
+			}).on('error', err => {
 				fs.unlink(filename);
-				resolve(false);
+
+				reject(new Error(err));
 			});
 		});
 	}
 
-	AwsCloudWatchChart.prototype.get = function()
-	{
-		var url = this.getURL();
+	AwsCloudWatchChart.prototype.get = function() {
+		let url = this.getURL();
 
-		var requestSettings = {
-           method: 'GET',
-           url: url,
-           encoding: null
-        };
+		let requestSettings = {
+			 method: 'GET',
+			 url: url,
+			 encoding: null
+		};
 
 		return new Promise((resolve, reject) => {
 			request(requestSettings, (error, response, body) => {
-				if (!error && response.statusCode == 200) 
+				if (!error && response.statusCode == 200)
 				{
 					resolve(body);
 				} else {
@@ -260,84 +276,83 @@ module.exports = (function() {
 		});
 	}
 
-	AwsCloudWatchChart.prototype.getURL = function()
-	{
-		var toTime = false;
-		var fromTime = false;
-		var absMaxValue = 0;
+	AwsCloudWatchChart.prototype.getURL = function() {
+		let startTime = false;
+		let endTime = false;
+		let absMaxValue = 0;
 
-		for (var km in this.metrics)
-			for (var ks in this.metrics[km].statistics)
+		for (let km in this.metrics)
+		  for (let ks in this.metrics[km].datapoints)
 			{
-				var d = new Date(this.metrics[km].statistics[ks].Timestamp);
-				if (toTime === false)
-					toTime = d;
-				if (fromTime === false)
-					fromTime = d;
+				let d = new Date(this.metrics[km].datapoints[ks].Timestamp);
+				if (endTime === false)
+					endTime = d;
+				if (startTime === false)
+					startTime = d;
 
-				if (d > toTime)
-					toTime = d;
-				if (d < fromTime)
-					fromTime = d;
+				if (d > endTime)
+					endTime = d;
+				if (d < startTime)
+					startTime = d;
 			}
 
-		var diff = toTime - fromTime;
-		diff = diff / this.chartSamples;
+		let diff = endTime - startTime;
+		diff = diff / this.config.chartSamples;
 
+		let timeLabels = [];
+		let prevTime = false;
 
-		var timeLabels = [];
-		var prevTime = false;
-		for (var i = fromTime; i <= toTime; i.setTime(i.getTime() + diff))
-		{
+		for (let i = startTime; i <= endTime; i.setTime(i.getTime() + diff)) {
 			if (prevTime !== false)
 			{
 				timeLabels.push({
 					text: ("0" + i.getUTCHours()).slice(-2)+':'+("0" + i.getUTCMinutes()).slice(-2),
-					from: new Date(prevTime),
-					to: new Date(i.getTime())
+					start: new Date(prevTime),
+					end: new Date(i.getTime())
 				});
 			}
 
 			prevTime = i.getTime();
 		}
 
-		var labels = [];
-		for (var k in timeLabels)
+		let labels = [];
+		for (let k in timeLabels)
 			labels.push( timeLabels[k].text );
 
-		var datasets = [];
-		for (var km in this.metrics)
+		let datasets = [];
+		for (let km in this.metrics)
 		{
-			var dataset = [];
+			let dataset = [];
 
-			for (var ktl in timeLabels)
+			for (let ktl in timeLabels)
 			{
-				var maxInPeriod = 0;
-				var totalInPeriod = 0;
-				var totalInPeriodCount = 0;
-				for (var ks in this.metrics[km].statistics)
-				{
-					var d = new Date(this.metrics[km].statistics[ks].Timestamp);
-					if (d > timeLabels[ktl].from && d<= timeLabels[ktl].to)
-					{
-						if (typeof(this.metrics[km].statistics[ks].Maximum) != 'undefined')
-						if (maxInPeriod < this.metrics[km].statistics[ks].Maximum)
-							maxInPeriod = this.metrics[km].statistics[ks].Maximum;
+				let maxInPeriod = 0;
+				let totalInPeriod = 0;
+				let totalInPeriodCount = 0;
 
-						if (typeof(this.metrics[km].statistics[ks].Average) != 'undefined')
+				for (let ks in this.metrics[km].datapoints)
+				{
+					let d = new Date(this.metrics[km].datapoints[ks].Timestamp);
+					if (d > timeLabels[ktl].start && d <= timeLabels[ktl].end)
+					{
+						if (typeof(this.metrics[km].datapoints[ks].Maximum) !== 'undefined')
+						if (maxInPeriod < this.metrics[km].datapoints[ks].Maximum)
+							maxInPeriod = this.metrics[km].datapoints[ks].Maximum;
+
+						if (typeof(this.metrics[km].datapoints[ks].Average) !== 'undefined')
 						{
-							totalInPeriod+=this.metrics[km].statistics[ks].Average;
+							totalInPeriod+=this.metrics[km].datapoints[ks].Average;
 							totalInPeriodCount++;
 						}
-					}	
+					}
 				}
 
-				var averageInPeriod = totalInPeriod;
+				let averageInPeriod = totalInPeriod;
 				if (totalInPeriodCount > 0)
 					averageInPeriod = totalInPeriod / totalInPeriodCount;
 
-				var toPush = averageInPeriod;
-				if (this.metrics[km].statisticValues == 'Maximum')
+				let toPush = averageInPeriod;
+				if (this.metrics[km].statistic == 'Maximum')
 					toPush = maxInPeriod;
 
 				if (toPush > absMaxValue)
@@ -349,24 +364,25 @@ module.exports = (function() {
 			datasets.push(dataset);
 		}
 
-		var topEdge = Math.ceil(absMaxValue*1.2);
+		let topEdge = Math.ceil(absMaxValue*1.2);
 
-		var datasetsAsStrings = [];
-		for (var k in datasets)
+        let datasetsAsStrings = [];
+
+		for (let k in datasets)
 			datasetsAsStrings.push(this.extendedEncode(datasets[k],topEdge));
 
-		var datasetsAsString = datasetsAsStrings.join(',');
+		let datasetsAsString = datasetsAsStrings.join(',');
 
-		var titles = [];
-		for (var km in this.metrics)
+		let titles = [];
+		for (let km in this.metrics)
 			titles.push(this.metrics[km].getTitle());
 
-		var colors = [];
-		for (var km in this.metrics)
+		let colors = [];
+		for (let km in this.metrics)
 			colors.push(this.metrics[km].color);
 
-		var styles = [];
-		for (var km in this.metrics) {
+		let styles = [];
+		for (let km in this.metrics) {
 			if (this.metrics[km].dashed)
 				styles.push(this.metrics[km].thickness+',5,5');
 			else
@@ -374,14 +390,14 @@ module.exports = (function() {
 		}
 
 
-		var url = 'http://chart.googleapis.com/chart?';
+		let url = 'http://chart.googleapis.com/chart?';
 		// https://developers.google.com/chart/image/docs/chart_params
 		url += 'cht=lc&';
 		url += 'chxl=0:|'+labels.join('|')+'&';
 		url += 'chxt=x,y&';
 		url += 'chco='+colors.join(',')+'&';
 		url += 'chls='+styles.join('|')+'&';
-		url += 'chs='+this.width+'x'+this.height+'&';
+		url += 'chs='+this.config.width+'x'+this.config.height+'&';
 		url += 'chxr=1,0,'+topEdge+',10&'
 		url += 'chg=20,10,1,5&';
 		url += 'chdl='+titles.join('|')+'&'
@@ -391,68 +407,63 @@ module.exports = (function() {
 	}
 
 
-	AwsCloudWatchChartMetric = function(AwsCloudWatchChart) {
-		/*
-		this.Namespace = 'AWS/EC2';
-		this.MetricName = 'CPUUtilization';
+	function AwsCloudWatchChartMetric(AwsCloudWatchChart) {
+		// Gross stuff, but some are expected at certain points (probably just Dimensions).
+		// @TODO: Remove when other cleanup done
 		this.Dimensions = [];
-		this.Unit = 'Percent'
-		*/
 
 		this.AwsCloudWatchChart = AwsCloudWatchChart;
-		this.cloudwatch = AwsCloudWatchChart.cloudwatch;
 
-		this.title = false;
+		this.datapoints = [];
 
-		this.statistics = [];
-		this.isLoaded = false;
-
-		this.statisticValues = 'Average';
-		this.color = 'FF0000';
-		this.thickness = '1';
-		this.dashed = false;
+		this.statistic	= 'Average';
+		this.color		= 'FF0000';
+		this.thickness	= '1';
+		this.dashed	 = false;
 	}
 
 	AwsCloudWatchChartMetric.prototype.getStatistics = function()
 	{
-		var toTime = new Date;
-		var fromTime = new Date;
+		let endTime = new Date;
+		let startTime = new Date;
 
-		fromTime.setTime(toTime.getTime() - this.AwsCloudWatchChart.timeOffset*60*1000);
+		const chartConfig = this.AwsCloudWatchChart.config;
 
-		var params = {
-			EndTime: toTime,
-			StartTime: fromTime,
+		startTime.setTime(endTime.getTime() - chartConfig.timeOffset*60*1000);
+
+		let params = {
+			StartTime: startTime,
+			EndTime: endTime,
 			MetricName: this.MetricName,
 			Namespace: this.Namespace,
-			Period: this.AwsCloudWatchChart.timePeriod,
-			Statistics: [ this.statisticValues ],
+			Period: chartConfig.timePeriod,
+			Statistics: [ this.statistic ],
 			Dimensions: this.Dimensions,
 			Unit: this.Unit
 		};
 
-		var that = this;
-
-		return this.cloudwatch.getMetricStatistics(params).promise()
+		return cloudwatchClient.getMetricStatistics(params).promise()
 			.then(data => {
+
 				for (const k in data.Datapoints) {
-					that.statistics.push(data.Datapoints[k]);
+					this.datapoints.push(data.Datapoints[k]);
 				}
 
-				that.isLoaded = true;
-				return Promise.resolve(that.statistics);
+				return Promise.resolve(this.datapoints);
 			})
-			.catch(err => {
-				return Promise.reject(Error(`Error loading statistics: ${err}`)); 
-			});
 	}
 
 	AwsCloudWatchChartMetric.prototype.getTitle = function()
 	{
-		if (this.title !== false)
+		if (typeof this.title === 'string') {
 			return this.title;
-		if (typeof(this.Dimensions[0]) != 'undefined' && typeof(this.Dimensions[0]['Value']) != 'undefined')
-			return this.Dimensions[0]['Value'];
+		}
+
+		if (this.Dimensions.length > 0) {
+			return this.Dimensions[0].Value || '';
+		}
+
+		return '';
 	}
 
 	return AwsCloudWatchChart;
